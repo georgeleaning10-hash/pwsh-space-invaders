@@ -73,6 +73,35 @@ $gameState = @{
     gameOver = $false
     paused = $false
     keyPressed = @{}
+    shields = @()
+}
+
+function Create-Shields {
+    param()
+
+    # Shield shape made of small bricks
+    $brickW = 8
+    $brickH = 6
+    $cols = 6
+    $rows = 4
+    $shieldWidth = $cols * $brickW
+    $y = $screenHeight - 150
+
+    $positions = @( [int]($screenWidth * 0.2), [int]($screenWidth * 0.5), [int]($screenWidth * 0.8) )
+
+    $shields = @()
+    foreach ($cx in $positions) {
+        $startX = $cx - [int]($shieldWidth / 2)
+        for ($r = 0; $r -lt $rows; $r++) {
+            for ($c = 0; $c -lt $cols; $c++) {
+                $x = $startX + ($c * $brickW)
+                $brick = @{ x = $x; y = $y + ($r * $brickH); width = $brickW; height = $brickH; hp = 2 }
+                $shields += $brick
+            }
+        }
+    }
+
+    return $shields
 }
 
 function Create-SpaceshipBitmap {
@@ -105,7 +134,7 @@ function Create-SpaceshipBitmap {
 function Create-EnemyBitmap {
     param($width, $height)
 
-    # Create a small pixel-art Space Invader style sprite scaled to the requested size
+    # Create a small pixel-art Space Invader 
     $bitmap = New-Object System.Drawing.Bitmap($width, $height)
     $g = [System.Drawing.Graphics]::FromImage($bitmap)
     $g.Clear([System.Drawing.Color]::Transparent)
@@ -152,6 +181,9 @@ function Create-EnemyBitmap {
 # Create sprite bitmaps
 $playerSprite = Create-SpaceshipBitmap 20 15
 $enemySprite = Create-EnemyBitmap 30 20
+
+# Initialize shields (3 blocks of bricks)
+$gameState.shields = Create-Shields
 
 # Create main form
 $form = New-Object System.Windows.Forms.Form
@@ -211,6 +243,18 @@ function Draw-Game {
     foreach ($enemy in $gameState.enemies) {
         $graphics.DrawImage($enemySprite, $enemy.x, $enemy.y)
     }
+
+    # Draw shields (bricks)
+    foreach ($brick in $gameState.shields) {
+        if ($brick.hp -ge 2) {
+            $brush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::SaddleBrown)
+        } elseif ($brick.hp -eq 1) {
+            $brush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::Sienna)
+        } else {
+            continue
+        }
+        $graphics.FillRectangle($brush, $brick.x, $brick.y, $brick.width, $brick.height)
+    }
     
     # Draw HUD
     $font = New-Object System.Drawing.Font("Arial", 12)
@@ -258,11 +302,45 @@ function Update-Game {
     foreach ($bullet in $gameState.bullets) {
         $bullet.y -= $bulletSpeed
     }
+
+    # Collision detection - player bullets and shields
+    foreach ($bullet in @($gameState.bullets)) {
+        foreach ($brick in @($gameState.shields)) {
+            if ($bullet.x -lt $brick.x + $brick.width -and
+                $bullet.x + 4 -gt $brick.x -and
+                $bullet.y -lt $brick.y + $brick.height -and
+                $bullet.y + 4 -gt $brick.y) {
+                $brick.hp--
+                if ($brick.hp -le 0) {
+                    $gameState.shields = @($gameState.shields | Where-Object { $_ -ne $brick })
+                }
+                $gameState.bullets = @($gameState.bullets | Where-Object { $_ -ne $bullet })
+                break
+            }
+        }
+    }
     
     # Update enemy bullets
     $gameState.enemyBullets = @($gameState.enemyBullets | Where-Object { $_.y -lt $screenHeight })
     foreach ($bullet in $gameState.enemyBullets) {
         $bullet.y += $bulletSpeed
+    }
+
+    # Collision detection - enemy bullets and shields
+    foreach ($bullet in @($gameState.enemyBullets)) {
+        foreach ($brick in @($gameState.shields)) {
+            if ($bullet.x -lt $brick.x + $brick.width -and
+                $bullet.x + $enemyBulletSize -gt $brick.x -and
+                $bullet.y -lt $brick.y + $brick.height -and
+                $bullet.y + $enemyBulletSize -gt $brick.y) {
+                $brick.hp--
+                if ($brick.hp -le 0) {
+                    $gameState.shields = @($gameState.shields | Where-Object { $_ -ne $brick })
+                }
+                $gameState.enemyBullets = @($gameState.enemyBullets | Where-Object { $_ -ne $bullet })
+                break
+            }
+        }
     }
     
     # Update enemies
