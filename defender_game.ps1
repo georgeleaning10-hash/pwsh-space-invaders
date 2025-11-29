@@ -1,4 +1,4 @@
-﻿[System.Reflection.Assembly]::LoadWithPartialName("System.Windows.Forms") | Out-Null
+[System.Reflection.Assembly]::LoadWithPartialName("System.Windows.Forms") | Out-Null
 [System.Reflection.Assembly]::LoadWithPartialName("System.Drawing") | Out-Null
 
 # Game constants
@@ -7,6 +7,56 @@ $screenHeight = 600
 $playerSpeed = 5
 $bulletSpeed = 8
 $enemySpeed = 2
+$enemyBulletSize = 6
+
+# Preload hit sound (non-blocking).
+# If a `hit.wav` exists next to the script it will be used; otherwise generate a short tone in memory.
+$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
+$soundPath = Join-Path $scriptDir 'hit.wav'
+if (Test-Path $soundPath) {
+    $hitSound = New-Object System.Media.SoundPlayer($soundPath)
+    try { $hitSound.LoadAsync() } catch {}
+} else {
+    # Generate a short 150ms 880Hz sine tone WAV in memory (16-bit PCM, mono)
+    $sampleRate = 22050
+    $durationMs = 150
+    $freq = 880
+    $amp = 0.25
+    $samples = [int]([math]::Floor($sampleRate * $durationMs / 1000))
+
+    $msStream = New-Object System.IO.MemoryStream
+    $bw = New-Object System.IO.BinaryWriter($msStream)
+
+    # RIFF header
+    $bw.Write([System.Text.Encoding]::ASCII.GetBytes("RIFF"))
+    $bw.Write([int32](36 + $samples * 2))
+    $bw.Write([System.Text.Encoding]::ASCII.GetBytes("WAVE"))
+
+    # fmt chunk
+    $bw.Write([System.Text.Encoding]::ASCII.GetBytes("fmt "))
+    $bw.Write([int32]16)
+    $bw.Write([int16]1) # PCM
+    $bw.Write([int16]1) # channels
+    $bw.Write([int32]$sampleRate)
+    $bw.Write([int32]($sampleRate * 1 * 16 / 8))
+    $bw.Write([int16](1 * 16 / 8))
+    $bw.Write([int16]16)
+
+    # data chunk header
+    $bw.Write([System.Text.Encoding]::ASCII.GetBytes("data"))
+    $bw.Write([int32]($samples * 2))
+
+    for ($i = 0; $i -lt $samples; $i++) {
+        $t = $i / $sampleRate
+        $value = [math]::Round($amp * 32767 * [math]::Sin(2 * [math]::PI * $freq * $t))
+        $bw.Write([int16]$value)
+    }
+
+    $bw.Flush()
+    $msStream.Position = 0
+    $hitSound = New-Object System.Media.SoundPlayer($msStream)
+    try { $hitSound.LoadAsync() } catch {}
+}
 
 # Initialize game state
 $gameState = @{
@@ -32,7 +82,7 @@ function Create-SpaceshipBitmap {
     $g = [System.Drawing.Graphics]::FromImage($bitmap)
     $g.Clear([System.Drawing.Color]::Black)
     
-    # Draw Space Invaders style spaceship
+    # space invader type spaceship demo sprite
     $brush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::Lime)
     
     # Main body - wider base
@@ -54,23 +104,47 @@ function Create-SpaceshipBitmap {
 
 function Create-EnemyBitmap {
     param($width, $height)
-    
+
+    # Create a small pixel-art Space Invader style sprite scaled to the requested size
     $bitmap = New-Object System.Drawing.Bitmap($width, $height)
     $g = [System.Drawing.Graphics]::FromImage($bitmap)
     $g.Clear([System.Drawing.Color]::Transparent)
-    
-    # Draw enemy - square with details
+
     $brush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::Red)
-    $pen = New-Object System.Drawing.Pen([System.Drawing.Color]::Red, 1)
-    
-    $g.FillRectangle($brush, 0, 0, $width, $height)
-    $g.DrawRectangle($pen, 0, 0, $width - 1, $height - 1)
-    
-    # Draw enemy eyes
-    $eyeBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::Yellow)
-    $g.FillEllipse($eyeBrush, 4, 3, 3, 3)
-    $g.FillEllipse($eyeBrush, $width - 7, 3, 3, 3)
-    
+
+    # 8x8 invader pattern (1 = pixel filled, 0 = empty)
+    $pattern = @(
+        '00111100',
+        '01111110',
+        '11111111',
+        '11011011',
+        '11111111',
+        '01100110',
+        '01000010',
+        '10100101'
+    )
+
+    $pw = $pattern[0].Length
+    $ph = $pattern.Count
+
+    $scaleX = [Math]::Floor($width / $pw)
+    $scaleY = [Math]::Floor($height / $ph)
+    $scale = [Math]::Max(1, [Math]::Min($scaleX, $scaleY))
+
+    $spriteWidth = $pw * $scale
+    $spriteHeight = $ph * $scale
+    $offsetX = [Math]::Floor(($width - $spriteWidth) / 2)
+    $offsetY = [Math]::Floor(($height - $spriteHeight) / 2)
+
+    for ($y = 0; $y -lt $ph; $y++) {
+        $row = $pattern[$y]
+        for ($x = 0; $x -lt $pw; $x++) {
+            if ($row[$x] -eq '1') {
+                $g.FillRectangle($brush, $offsetX + ($x * $scale), $offsetY + ($y * $scale), $scale, $scale)
+            }
+        }
+    }
+
     $g.Dispose()
     return $bitmap
 }
@@ -130,7 +204,7 @@ function Draw-Game {
     # Draw enemy bullets
     $enemyBulletBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::Red)
     foreach ($bullet in $gameState.enemyBullets) {
-        $graphics.FillEllipse($enemyBulletBrush, $bullet.x, $bullet.y, 3, 3)
+        $graphics.FillEllipse($enemyBulletBrush, $bullet.x, $bullet.y, $enemyBulletSize, $enemyBulletSize)
     }
     
     # Draw enemies
@@ -202,7 +276,7 @@ function Update-Game {
         # Enemy shoots randomly (5% chance per frame)
         if ((Get-Random -Minimum 0 -Maximum 100) -lt 5) {
             $gameState.enemyBullets += @{
-                x = $enemy.x + $enemy.width / 2 - 1.5
+                x = $enemy.x + $enemy.width / 2 - ($enemyBulletSize / 2)
                 y = $enemy.y + $enemy.height
             }
         }
@@ -218,6 +292,13 @@ function Update-Game {
                 $gameState.bullets = @($gameState.bullets | Where-Object { $_ -ne $bullet })
                 $gameState.enemies = @($gameState.enemies | Where-Object { $_ -ne $enemy })
                 $gameState.score += 100
+                # Play hit sound asynchronously (preloaded); fallback to SystemSounds.Beep
+                try {
+                    if ($hitSound) { $hitSound.Play() } else { [System.Media.SystemSounds]::Beep.Play() }
+                } catch {
+                    # ignore sound errors so game loop doesn't crash
+                }
+                # audio feedback on enemy hit
                 break
             }
         }
@@ -240,9 +321,9 @@ function Update-Game {
     # Collision detection - enemy bullets and player
     foreach ($bullet in $gameState.enemyBullets) {
         if ($bullet.x -lt $gameState.playerX + $gameState.playerWidth -and
-            $bullet.x + 3 -gt $gameState.playerX -and
+            $bullet.x + $enemyBulletSize -gt $gameState.playerX -and
             $bullet.y -lt $gameState.playerY + $gameState.playerHeight -and
-            $bullet.y + 3 -gt $gameState.playerY) {
+            $bullet.y + $enemyBulletSize -gt $gameState.playerY) {
             $gameState.playerHealth--
             $gameState.enemyBullets = @($gameState.enemyBullets | Where-Object { $_ -ne $bullet })
             if ($gameState.playerHealth -le 0) {
