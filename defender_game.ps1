@@ -1,8 +1,6 @@
 [System.Reflection.Assembly]::LoadWithPartialName("System.Windows.Forms") | Out-Null
 [System.Reflection.Assembly]::LoadWithPartialName("System.Drawing") | Out-Null
 
-# Game constants, changing will mess up some features.
-
 $screenWidth = 800
 $screenHeight = 600
 $playerSpeed = 5
@@ -10,16 +8,12 @@ $bulletSpeed = 8
 $enemySpeed = 2
 $enemyBulletSize = 6
 
-# Preload hit sound
-#check if user has a sound called hit.wav inside their folder if not a premade beep will be played
-
 $scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Definition
 $soundPath = Join-Path $scriptDir 'hit.wav'
 if (Test-Path $soundPath) {
     $hitSound = New-Object System.Media.SoundPlayer($soundPath)
     try { $hitSound.LoadAsync() } catch {}
 } else {
-    # make a short 150ms 880Hz sine tone WAV in memory (16-bit PCM, mono)
     $sampleRate = 22050
     $durationMs = 150
     $freq = 880
@@ -29,22 +23,19 @@ if (Test-Path $soundPath) {
     $msStream = New-Object System.IO.MemoryStream
     $bw = New-Object System.IO.BinaryWriter($msStream)
 
-    # RIFF header
     $bw.Write([System.Text.Encoding]::ASCII.GetBytes("RIFF"))
     $bw.Write([int32](36 + $samples * 2))
     $bw.Write([System.Text.Encoding]::ASCII.GetBytes("WAVE"))
 
-    # fmt chunk
     $bw.Write([System.Text.Encoding]::ASCII.GetBytes("fmt "))
     $bw.Write([int32]16)
-    $bw.Write([int16]1) # PCM
-    $bw.Write([int16]1) # channels
+    $bw.Write([int16]1)
+    $bw.Write([int16]1)
     $bw.Write([int32]$sampleRate)
     $bw.Write([int32]($sampleRate * 1 * 16 / 8))
     $bw.Write([int16](1 * 16 / 8))
     $bw.Write([int16]16)
 
-    # data chunk header
     $bw.Write([System.Text.Encoding]::ASCII.GetBytes("data"))
     $bw.Write([int32]($samples * 2))
 
@@ -60,7 +51,6 @@ if (Test-Path $soundPath) {
     try { $hitSound.LoadAsync() } catch {}
 }
 
-# Initialize game state
 $gameState = @{
     playerX = $screenWidth / 2
     playerY = $screenHeight - 50
@@ -78,10 +68,7 @@ $gameState = @{
     shields = @()
 }
 
-function Create-Shields {
-    param()
-
-    # Shield shape, brown brick
+function New-Shield {
     $brickW = 8
     $brickH = 6
     $cols = 6
@@ -112,45 +99,36 @@ function Create-Shields {
     return $shields
 }
 
-function Create-SpaceshipBitmap {
-    param($width, $height)
+function Make-PlayerShip {
+    param($w, $h)
     
-    $bitmap = New-Object System.Drawing.Bitmap($width, $height)
-    $g = [System.Drawing.Graphics]::FromImage($bitmap)
+    $bmp = New-Object System.Drawing.Bitmap($w, $h)
+    $g = [System.Drawing.Graphics]::FromImage($bmp)
     $g.Clear([System.Drawing.Color]::Black)
     
-    # space invader type spaceship demo sprite
-    $brush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::Lime)
+    $br = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::Lime)
     
-    # Main body - wider base
-    $g.FillRectangle($brush, 4, 6, 12, 8)
+    $g.FillRectangle($br, 4, 6, 12, 8)
+    $g.FillRectangle($br, 0, 8, 4, 4)
+    $g.FillRectangle($br, 16, 8, 4, 4)
     
-    # Left wing
-    $g.FillRectangle($brush, 0, 8, 4, 4)
-    
-    # Right wing
-    $g.FillRectangle($brush, 16, 8, 4, 4)
-    
-    # Cockpit
-    $cockpitBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::Cyan)
-    $g.FillRectangle($cockpitBrush, 7, 3, 6, 3)
+    $cockpitBr = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::Cyan)
+    $g.FillRectangle($cockpitBr, 7, 3, 6, 3)
     
     $g.Dispose()
-    return $bitmap
+    return $bmp
 }
 
-function Create-EnemyBitmap {
-    param($width, $height)
+function Make-EnemyShip {
+    param($w, $h)
 
-    # Create a small pixel-art Space Invader 
-    $bitmap = New-Object System.Drawing.Bitmap($width, $height)
-    $g = [System.Drawing.Graphics]::FromImage($bitmap)
+    $bmp = New-Object System.Drawing.Bitmap($w, $h)
+    $g = [System.Drawing.Graphics]::FromImage($bmp)
     $g.Clear([System.Drawing.Color]::Transparent)
 
-    $brush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::Red)
+    $br = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::Red)
 
-    # 8x8 invader pattern (1 = pixel filled, 0 = empty)
-    $pattern = @(
+    $pat = @(
         '00111100',
         '01111110',
         '11111111',
@@ -161,247 +139,285 @@ function Create-EnemyBitmap {
         '10100101'
     )
 
-    $pw = $pattern[0].Length
-    $ph = $pattern.Count
+    $pw = $pat[0].Length
+    $ph = $pat.Count
 
-    $scaleX = [Math]::Floor($width / $pw)
-    $scaleY = [Math]::Floor($height / $ph)
-    $scale = [Math]::Max(1, [Math]::Min($scaleX, $scaleY))
+    $sx = [Math]::Floor($w / $pw)
+    $sy = [Math]::Floor($h / $ph)
+    $scale = [Math]::Max(1, [Math]::Min($sx, $sy))
 
-    $spriteWidth = $pw * $scale
-    $spriteHeight = $ph * $scale
-    $offsetX = [Math]::Floor(($width - $spriteWidth) / 2)
-    $offsetY = [Math]::Floor(($height - $spriteHeight) / 2)
+    $sprW = $pw * $scale
+    $sprH = $ph * $scale
+    $ox = [Math]::Floor(($w - $sprW) / 2)
+    $oy = [Math]::Floor(($h - $sprH) / 2)
 
     for ($y = 0; $y -lt $ph; $y++) {
-        $row = $pattern[$y]
+        $row = $pat[$y]
         for ($x = 0; $x -lt $pw; $x++) {
             if ($row[$x] -eq '1') {
-                $rectX = $offsetX + ($x * $scale)
-                $rectY = $offsetY + ($y * $scale)
-                $g.FillRectangle($brush, $rectX, $rectY, $scale, $scale)
+                $px = $ox + ($x * $scale)
+                $py = $oy + ($y * $scale)
+                $g.FillRectangle($br, $px, $py, $scale, $scale)
             }
         }
     }
 
     $g.Dispose()
-    return $bitmap
+    return $bmp
 }
 
-# Create sprite bitmaps
-$playerSprite = Create-SpaceshipBitmap 20 15
-$enemySprite = Create-EnemyBitmap 30 20
+$pSprite = Make-PlayerShip 20 15
+$eSprite = Make-EnemyShip 30 20
 
-# Initialize shields (3 blocks of bricks)
-$gameState.shields = Create-Shields
+$gameState.shields = New-Shield
 
-# Create main form
-$form = New-Object System.Windows.Forms.Form
-$form.Text = "Defender"
-$form.Width = $screenWidth + 20
-$form.Height = $screenHeight + 60
-$form.FormBorderStyle = "FixedSingle"
-$form.MaximizeBox = $false
-$form.StartPosition = "CenterScreen"
-$form.BackColor = [System.Drawing.Color]::Black
+$f = New-Object System.Windows.Forms.Form
+$f.Text = "Defender"
+$f.Width = $screenWidth + 20
+$f.Height = $screenHeight + 60
+$f.FormBorderStyle = "FixedSingle"
+$f.MaximizeBox = $false
+$f.StartPosition = "CenterScreen"
+$f.BackColor = [System.Drawing.Color]::Black
 
-# Create picture box for rendering
-$pictureBox = New-Object System.Windows.Forms.PictureBox
-$pictureBox.Width = $screenWidth
-$pictureBox.Height = $screenHeight
-$pictureBox.Location = New-Object System.Drawing.Point(0, 0)
-$form.Controls.Add($pictureBox)
+$pb = New-Object System.Windows.Forms.PictureBox
+$pb.Width = $screenWidth
+$pb.Height = $screenHeight
+$pb.Location = New-Object System.Drawing.Point(0, 0)
+$f.Controls.Add($pb)
 
-# Create bitmap for double buffering
-$bitmap = New-Object System.Drawing.Bitmap($screenWidth, $screenHeight)
-$graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+$bmp = New-Object System.Drawing.Bitmap($screenWidth, $screenHeight)
+$g = [System.Drawing.Graphics]::FromImage($bmp)
 
-function Draw-Game {
-    $graphics.Clear([System.Drawing.Color]::Black)
+function Render {
+    $g.Clear([System.Drawing.Color]::Black)
     
-    # Draw background grid
-    $pen = New-Object System.Drawing.Pen([System.Drawing.Color]::DarkGreen, 1)
-    for ($i = 0; $i -lt $screenWidth; $i += 40) {
-        $graphics.DrawLine($pen, $i, 0, $i, $screenHeight)
-    }
-    for ($i = 0; $i -lt $screenHeight; $i += 40) {
-        $graphics.DrawLine($pen, 0, $i, $screenWidth, $i)
+    $pgrid = New-Object System.Drawing.Pen([System.Drawing.Color]::DarkGreen, 1)
+    
+    $i = 0
+    while ($i -lt $screenWidth) {
+        $g.DrawLine($pgrid, $i, 0, $i, $screenHeight)
+        $i += 40
     }
     
-    # player spaceship
-    $graphics.DrawImage($playerSprite, $gameState.playerX, $gameState.playerY)
-    
-    # player health bars
-    $healthBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::Red)
-    for ($i = 0; $i -lt $gameState.playerHealth; $i++) {
-        $hx = $gameState.playerX - 25 + ($i * 8)
-        $graphics.FillRectangle($healthBrush, $hx, $gameState.playerY - 10, 6, 5)
+    $j = 0
+    while ($j -lt $screenHeight) {
+        $g.DrawLine($pgrid, 0, $j, $screenWidth, $j)
+        $j = $j + 40
     }
     
-    # bullets
-    $bulletBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::Yellow)
-    foreach ($bullet in $gameState.bullets) {
-        $graphics.FillEllipse($bulletBrush, $bullet.x, $bullet.y, 4, 4)
+    $g.DrawImage($pSprite, $gameState.playerX, $gameState.playerY)
+    
+    $hBr = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::Red)
+    $healthcount = 0
+    while ($healthcount -lt $gameState.playerHealth) {
+        $hx = $gameState.playerX - 25 + ($healthcount * 8)
+        $g.FillRectangle($hBr, $hx, $gameState.playerY - 10, 6, 5)
+        $healthcount = $healthcount + 1
     }
     
-    # enemy bullets
-    $enemyBulletBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::Red)
-    foreach ($bullet in $gameState.enemyBullets) {
-        $graphics.FillEllipse($enemyBulletBrush, $bullet.x, $bullet.y, $enemyBulletSize, $enemyBulletSize)
+    $bulBr = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::Yellow)
+    foreach ($b in $gameState.bullets) {
+        $g.FillEllipse($bulBr, $b.x, $b.y, 4, 4)
     }
     
-    # Draw enemies
-    foreach ($enemy in $gameState.enemies) {
-        $graphics.DrawImage($enemySprite, $enemy.x, $enemy.y)
+    $ebulBr = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::Red)
+    $bulletcount = 0
+    $totalebullets = $gameState.enemyBullets.Count
+    while ($bulletcount -lt $totalebullets) {
+        $bul = $gameState.enemyBullets[$bulletcount]
+        $g.FillEllipse($ebulBr, $bul.x, $bul.y, $enemyBulletSize, $enemyBulletSize)
+        $bulletcount++
+    }
+    
+    foreach ($e in $gameState.enemies) {
+        $g.DrawImage($eSprite, $e.x, $e.y)
     }
 
-    # Draw shields (bricks)
-    foreach ($brick in $gameState.shields) {
-        if ($brick.hp -ge 2) {
-            $brush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::SaddleBrown)
-        } elseif ($brick.hp -eq 1) {
-            $brush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::Sienna)
+    $shieldcount = 0
+    $totalshields = $gameState.shields.Count
+    while ($shieldcount -lt $totalshields) {
+        $br = $gameState.shields[$shieldcount]
+        if ($br.hp -ge 2) {
+            $brkBr = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::SaddleBrown)
+        } elseif ($br.hp -eq 1) {
+            $brkBr = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::Sienna)
         } else {
+            $shieldcount++
             continue
         }
-        $graphics.FillRectangle($brush, $brick.x, $brick.y, $brick.width, $brick.height)
+        $g.FillRectangle($brkBr, $br.x, $br.y, $br.width, $br.height)
+        $shieldcount++
     }
     
-    # Draw HUD
-    $font = New-Object System.Drawing.Font("Arial", 12)
-    $whiteBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::White)
-    $scoreText = "Score: $($gameState.score)"
-    $waveText = "Wave: $($gameState.wave)"
-    $livesText = "Lives: $($gameState.playerHealth)"
+    $fnt = New-Object System.Drawing.Font("Arial", 12)
+    $wBr = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::White)
     
-    $graphics.DrawString($scoreText, $font, $whiteBrush, 10, 10)
-    $graphics.DrawString($waveText, $font, $whiteBrush, 10, 35)
-    $graphics.DrawString($livesText, $font, $whiteBrush, 10, 60)
+    $scTxt = "Score: " + $gameState.score
+    $wvTxt = "Wave: " + $gameState.wave
+    $lvTxt = "Lives: " + $gameState.playerHealth
     
-    if ($gameState.gameOver) {
-        $gameOverFont = New-Object System.Drawing.Font("Arial", 28, [System.Drawing.FontStyle]::Bold)
-        $gameOverBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::Magenta)
-        $graphics.DrawString("GAME OVER", $gameOverFont, $gameOverBrush, 250, 250)
+    $g.DrawString($scTxt, $fnt, $wBr, 10, 10)
+    $g.DrawString($wvTxt, $fnt, $wBr, 10, 35)
+    $g.DrawString($lvTxt, $fnt, $wBr, 10, 60)
+    
+    if ($gameState.gameOver -eq $true) {
+        $gofnt = New-Object System.Drawing.Font("Arial", 28, [System.Drawing.FontStyle]::Bold)
+        $goBr = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::Magenta)
+        $g.DrawString("GAME OVER", $gofnt, $goBr, 250, 250)
         
-        $smallFont = New-Object System.Drawing.Font("Arial", 14)
-        $finalScoreText = "Final Score: $($gameState.score)"
-        $graphics.DrawString($finalScoreText, $smallFont, $whiteBrush, 300, 310)
-        $graphics.DrawString("Press R to Restart", $smallFont, $whiteBrush, 300, 340)
+        $sfnt = New-Object System.Drawing.Font("Arial", 14)
+        $fsTxt = "Final Score: " + $gameState.score
+        $g.DrawString($fsTxt, $sfnt, $wBr, 300, 310)
+        $g.DrawString("Press R to Restart", $sfnt, $wBr, 300, 340)
     }
     
-    if ($gameState.paused) {
-        $pauseFont = New-Object System.Drawing.Font("Arial", 20, [System.Drawing.FontStyle]::Bold)
-        $pauseBrush = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::Cyan)
-        $graphics.DrawString("PAUSED", $pauseFont, $pauseBrush, 350, 270)
+    if ($gameState.paused -eq $true) {
+        $pfnt = New-Object System.Drawing.Font("Arial", 20, [System.Drawing.FontStyle]::Bold)
+        $pBr = New-Object System.Drawing.SolidBrush([System.Drawing.Color]::Cyan)
+        $g.DrawString("PAUSED", $pfnt, $pBr, 350, 270)
     }
     
-    $pictureBox.Image = $bitmap
+    $pb.Image = $bmp
 }
 
-function Update-Game {  
-    if ($gameState.gameOver -or $gameState.paused) { return }
+function CheckCollision {
+    param($x1, $y1, $w1, $h1, $x2, $y2, $w2, $h2)
     
-    # Player movement
+    $collided = $false
+    
+    if ($x1 -lt ($x2 + $w2)) {
+        if (($x1 + $w1) -gt $x2) {
+            if ($y1 -lt ($y2 + $h2)) {
+                if (($y1 + $h1) -gt $y2) {
+                    $collided = $true
+                }
+            }
+        }
+    }
+    
+    return $collided
+}
+
+function Tick {  
+    if ($gameState.gameOver -eq $true) {
+        return
+    }
+    if ($gameState.paused -eq $true) {
+        return
+    }
+    
     if ($gameState.keyPressed['Left'] -or $gameState.keyPressed['A']) {
-        $gameState.playerX -= $playerSpeed
+        $gameState.playerX = $gameState.playerX - $playerSpeed
     }
     if ($gameState.keyPressed['Right'] -or $gameState.keyPressed['D']) {
-        $gameState.playerX += $playerSpeed
+        $gameState.playerX = $gameState.playerX + $playerSpeed
     }
     
-    # Constrain player to screen
     if ($gameState.playerX -lt 0) { 
         $gameState.playerX = 0 
     }
-    if ($gameState.playerX + $gameState.playerWidth -gt $screenWidth) { 
+    if (($gameState.playerX + $gameState.playerWidth) -gt $screenWidth) { 
         $gameState.playerX = $screenWidth - $gameState.playerWidth 
     }
     
-    # Update bullets
-    $gameState.bullets = @($gameState.bullets | Where-Object { $_.y -gt 0 })
-    foreach ($bullet in $gameState.bullets) {
-        $bullet.y -= $bulletSpeed
+    $newbullets = @()
+    foreach ($b in $gameState.bullets) {
+        if ($b.y -gt 0) {
+            $newbullets += $b
+        }
+    }
+    $gameState.bullets = $newbullets
+    
+    foreach ($b in $gameState.bullets) {
+        $b.y = $b.y - $bulletSpeed
     }
 
-    # Collision detection - player bullets and shields
-    $bulletsToRemove = @()
-    foreach ($bullet in $gameState.bullets) {
-        $hit = $false
-        foreach ($brick in $gameState.shields) {
-            if ($bullet.x -lt $brick.x + $brick.width -and
-                $bullet.x + 4 -gt $brick.x -and
-                $bullet.y -lt $brick.y + $brick.height -and
-                $bullet.y + 4 -gt $brick.y) {
-                $brick.hp--
-                if ($brick.hp -le 0) {
-                    $gameState.shields = @($gameState.shields | Where-Object { $_ -ne $brick })
+    $bulletstokeep = @()
+    foreach ($b in $gameState.bullets) {
+        $hitshield = $false
+        foreach ($br in $gameState.shields) {
+            $col = CheckCollision $b.x $b.y 4 4 $br.x $br.y $br.width $br.height
+            if ($col -eq $true) {
+                $br.hp = $br.hp - 1
+                if ($br.hp -le 0) {
+                    $gameState.shields = @($gameState.shields | Where-Object { $_ -ne $br })
                 }
-                $bulletsToRemove += $bullet
-                $hit = $true
+                $hitshield = $true
                 break
             }
         }
+        if ($hitshield -eq $false) {
+            $bulletstokeep += $b
+        }
     }
-    $gameState.bullets = @($gameState.bullets | Where-Object { $bulletsToRemove -notcontains $_ })
+    $gameState.bullets = $bulletstokeep
     
-    # Update enemy bullets
-    $gameState.enemyBullets = @($gameState.enemyBullets | Where-Object { $_.y -lt $screenHeight })
-    foreach ($bullet in $gameState.enemyBullets) {
-        $bullet.y += $bulletSpeed
+    $newenemybullets = @()
+    foreach ($b in $gameState.enemyBullets) {
+        if ($b.y -lt $screenHeight) {
+            $newenemybullets += $b
+        }
+    }
+    $gameState.enemyBullets = $newenemybullets
+    
+    foreach ($b in $gameState.enemyBullets) {
+        $b.y = $b.y + $bulletSpeed
     }
 
-    # Collision detection - enemy bullets and shields
-    $enemyBulletsToRemove = @()
-    foreach ($bullet in $gameState.enemyBullets) {
-        foreach ($brick in $gameState.shields) {
-            if ($bullet.x -lt $brick.x + $brick.width -and
-                $bullet.x + $enemyBulletSize -gt $brick.x -and
-                $bullet.y -lt $brick.y + $brick.height -and
-                $bullet.y + $enemyBulletSize -gt $brick.y) {
-                $brick.hp--
-                if ($brick.hp -le 0) {
-                    $gameState.shields = @($gameState.shields | Where-Object { $_ -ne $brick })
+    $enemybulletstokeep = @()
+    foreach ($b in $gameState.enemyBullets) {
+        $hitshieldeb = $false
+        foreach ($br in $gameState.shields) {
+            $col2 = CheckCollision $b.x $b.y $enemyBulletSize $enemyBulletSize $br.x $br.y $br.width $br.height
+            if ($col2 -eq $true) {
+                $br.hp = $br.hp - 1
+                if ($br.hp -le 0) {
+                    $gameState.shields = @($gameState.shields | Where-Object { $_ -ne $br })
                 }
-                $enemyBulletsToRemove += $bullet
+                $hitshieldeb = $true
                 break
             }
         }
+        if ($hitshieldeb -eq $false) {
+            $enemybulletstokeep += $b
+        }
     }
-    $gameState.enemyBullets = @($gameState.enemyBullets | Where-Object { $enemyBulletsToRemove -notcontains $_ })
+    $gameState.enemyBullets = $enemybulletstokeep
     
-    # Update enemies
-    foreach ($enemy in $gameState.enemies) {
-        $enemy.x += $enemy.dx * $enemySpeed
-        if ($enemy.x -lt 0 -or $enemy.x + $enemy.width -gt $screenWidth) {
-            $enemy.dx *= -1
-            $enemy.y += 30  # Move down one layer
+    foreach ($e in $gameState.enemies) {
+        $e.x = $e.x + ($e.dx * $enemySpeed)
+        if ($e.x -lt 0) {
+            $e.dx = -1 * $e.dx
+            $e.y = $e.y + 30
+        }
+        if (($e.x + $e.width) -gt $screenWidth) {
+            $e.dx = $e.dx * -1
+            $e.y = $e.y + 30
         }
         
-        # Enemy shoots randomly (5% chance per frame)
-        $rand = Get-Random -Minimum 0 -Maximum 100
-        if ($rand -lt 5) {
-            $newBullet = @{
-                x = $enemy.x + $enemy.width / 2 - ($enemyBulletSize / 2)
-                y = $enemy.y + $enemy.height
+        $r = Get-Random -Minimum 0 -Maximum 100
+        if ($r -lt 5) {
+            $bulletx = $e.x + ($e.width / 2) - ($enemyBulletSize / 2)
+            $bullety = $e.y + $e.height
+            $nB = @{
+                x = $bulletx
+                y = $bullety
             }
-            $gameState.enemyBullets += $newBullet
+            $gameState.enemyBullets += $nB
         }
     }
     
-    # Collision detection - bullets and enemies
-    $bulletsToRemove2 = @()
+    $bulletstoremove = @()
     $enemiesToRemove = @()
     
-    foreach ($bullet in $gameState.bullets) {
-        foreach ($enemy in $gameState.enemies) {
-            if ($bullet.x -lt $enemy.x + $enemy.width -and
-                $bullet.x + 4 -gt $enemy.x -and
-                $bullet.y -lt $enemy.y + $enemy.height -and
-                $bullet.y + 4 -gt $enemy.y) {
-                $bulletsToRemove2 += $bullet
-                $enemiesToRemove += $enemy
-                $gameState.score += 100
-                # Play hit sound asynchronously (preloaded); fallback to SystemSounds.Beep
+    foreach ($b in $gameState.bullets) {
+        foreach ($e in $gameState.enemies) {
+            $c = CheckCollision $b.x $b.y 4 4 $e.x $e.y $e.width $e.height
+            if ($c -eq $true) {
+                $bulletstoremove += $b
+                $enemiesToRemove += $e
+                $gameState.score = $gameState.score + 100
                 try {
                     if ($hitSound) { 
                         $hitSound.Play() 
@@ -409,115 +425,135 @@ function Update-Game {
                         [System.Media.SystemSounds]::Beep.Play() 
                     }
                 } catch {
-                    # ignore sound errors so game loop doesn't crash
                 }
-                # audio feedback on enemy hit
                 break
             }
         }
     }
-    $gameState.bullets = @($gameState.bullets | Where-Object { $bulletsToRemove2 -notcontains $_ })
-    $gameState.enemies = @($gameState.enemies | Where-Object { $enemiesToRemove -notcontains $_ })
     
-    # Collision detection - enemies and player
-    foreach ($enemy in $gameState.enemies) {
-        if ($enemy.x -lt $gameState.playerX + $gameState.playerWidth -and
-            $enemy.x + $enemy.width -gt $gameState.playerX -and
-            $enemy.y -lt $gameState.playerY + $gameState.playerHeight -and
-            $enemy.y + $enemy.height -gt $gameState.playerY) {
-            $gameState.playerHealth--
-            $gameState.enemies = @($gameState.enemies | Where-Object { $_ -ne $enemy })
+    $finalBullets = @()
+    foreach ($b in $gameState.bullets) {
+        if ($bulletstoremove -notcontains $b) {
+            $finalBullets += $b
+        }
+    }
+    $gameState.bullets = $finalBullets
+    
+    $finalEnemies = @()
+    foreach ($e in $gameState.enemies) {
+        if ($enemiesToRemove -notcontains $e) {
+            $finalEnemies += $e
+        }
+    }
+    $gameState.enemies = $finalEnemies
+    
+    foreach ($e in $gameState.enemies) {
+        $c2 = CheckCollision $e.x $e.y $e.width $e.height $gameState.playerX $gameState.playerY $gameState.playerWidth $gameState.playerHeight
+        if ($c2 -eq $true) {
+            $gameState.playerHealth = $gameState.playerHealth - 1
+            $gameState.enemies = @($gameState.enemies | Where-Object { $_ -ne $e })
             if ($gameState.playerHealth -le 0) {
                 $gameState.gameOver = $true
             }
         }
     }
     
-    # Collision detection - enemy bullets and player
-    foreach ($bullet in $gameState.enemyBullets) {
-        if ($bullet.x -lt $gameState.playerX + $gameState.playerWidth -and
-            $bullet.x + $enemyBulletSize -gt $gameState.playerX -and
-            $bullet.y -lt $gameState.playerY + $gameState.playerHeight -and
-            $bullet.y + $enemyBulletSize -gt $gameState.playerY) {
-            $gameState.playerHealth--
-            $gameState.enemyBullets = @($gameState.enemyBullets | Where-Object { $_ -ne $bullet })
+    $bulletstoremoveeb = @()
+    foreach ($b in $gameState.enemyBullets) {
+        $c3 = CheckCollision $b.x $b.y $enemyBulletSize $enemyBulletSize $gameState.playerX $gameState.playerY $gameState.playerWidth $gameState.playerHeight
+        if ($c3 -eq $true) {
+            $gameState.playerHealth = $gameState.playerHealth - 1
+            $bulletstoremoveeb += $b
             if ($gameState.playerHealth -le 0) {
                 $gameState.gameOver = $true
             }
         }
     }
     
-    # Spawn enemies
+    $finalEnemyBullets = @()
+    foreach ($b in $gameState.enemyBullets) {
+        if ($bulletstoremoveeb -notcontains $b) {
+            $finalEnemyBullets += $b
+        }
+    }
+    $gameState.enemyBullets = $finalEnemyBullets
+    
     if ($gameState.enemies.Count -eq 0) {
-        $gameState.wave++
-        $enemiesToSpawn = 2 + $gameState.wave
-        for ($i = 0; $i -lt $enemiesToSpawn; $i++) {
-            $newEnemy = @{
+        $gameState.wave = $gameState.wave + 1
+        $cnt = 2 + $gameState.wave
+        $enemyspawnindex = 0
+        while ($enemyspawnindex -lt $cnt) {
+            $nE = @{
                 x = Get-Random -Minimum 0 -Maximum ($screenWidth - 30)
                 y = Get-Random -Minimum 20 -Maximum 150
                 width = 30
                 height = 20
                 dx = if ((Get-Random -Minimum 0 -Maximum 2) -eq 0) { 1 } else { -1 }
             }
-            $gameState.enemies += $newEnemy
+            $gameState.enemies += $nE
+            $enemyspawnindex = $enemyspawnindex + 1
         }
     }
 }
 
-# Event handlers
-$form.Add_KeyDown({
+$f.Add_KeyDown({
     $code = $_.KeyCode.ToString()
     $gameState.keyPressed[$code] = $true
     
     if ($_.KeyCode -eq "Space") {
-        if (-not $gameState.gameOver) {
-            $newBullet = @{
-                x = $gameState.playerX + $gameState.playerWidth / 2 - 2
+        if ($gameState.gameOver -ne $true) {
+            $newbullet = @{
+                x = ($gameState.playerX + $gameState.playerWidth / 2) - 2
                 y = $gameState.playerY - 10
             }
-            $gameState.bullets += $newBullet
+            $gameState.bullets += $newbullet
         }
     }
     
     if ($_.KeyCode -eq "P") {
-        $gameState.paused = -not $gameState.paused
+        if ($gameState.paused -eq $true) {
+            $gameState.paused = $false
+        } else {
+            $gameState.paused = $true
+        }
     }
     
-    if ($_.KeyCode -eq "R" -and $gameState.gameOver) {
-        $gameState.playerX = $screenWidth / 2
-        $gameState.playerY = $screenHeight - 50
-        $gameState.playerHealth = 3
-        $gameState.score = 0
-        $gameState.bullets = @()
-        $gameState.enemies = @()
-        $gameState.wave = 1
-        $gameState.gameOver = $false
+    if ($_.KeyCode -eq "R") {
+        if ($gameState.gameOver -eq $true) {
+            $gameState.playerX = $screenWidth / 2
+            $gameState.playerY = $screenHeight - 50
+            $gameState.playerHealth = 3
+            $gameState.score = 0
+            $gameState.bullets = @()
+            $gameState.enemies = @()
+            $gameState.wave = 1
+            $gameState.gameOver = $false
+        }
     }
 })
 
-$form.Add_KeyUp({
+$f.Add_KeyUp({
     $code = $_.KeyCode.ToString()
     $gameState.keyPressed[$code] = $false
 })
 
-$form.Add_FormClosing({
-    $timer.Stop()
-    $timer.Dispose()
+$f.Add_FormClosing({
+    $tm.Stop()
+    $tm.Dispose()
 })
 
-# Game loop
-$timer = New-Object System.Windows.Forms.Timer
-$timer.Interval = 30
-$timer.Add_Tick({
+$tm = New-Object System.Windows.Forms.Timer
+$tm.Interval = 30
+$tm.Add_Tick({
     try {
-        Update-Game
-        Draw-Game
+        Tick
+        Render
     } catch {
-        Write-Host "Error in game loop: $_"
+        Write-Host "Error occurred: $_"
     }
 })
-$timer.Start()
+$tm.Start()
 
-$form.ShowDialog() | Out-Null
-$graphics.Dispose()
-$bitmap.Dispose()
+$f.ShowDialog() | Out-Null
+$g.Dispose()
+$bmp.Dispose()
